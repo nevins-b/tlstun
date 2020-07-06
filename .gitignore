@@ -9,3 +9,4 @@ cli/server.db.lock
 doc/tlstun
 tlstun
 tlstun.exe
+vendor

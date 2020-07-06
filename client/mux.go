@@ -3,8 +3,10 @@ package client
 import (
 	"net"
 	"sync/atomic"
+	"time"
 
 	"github.com/hashicorp/yamux"
+	"github.com/pkg/errors"
 	"golang.org/x/net/websocket"
 )
 
@@ -17,46 +19,40 @@ func (c *client) handleSession(conn net.Conn) {
 		conn.Close()
 	}(&sent, &received)
 
-	var err error
-	var stream net.Conn
-
-	c.lock.Lock()
-	// Open a new stream
-	if c.session == nil {
-		err = c.openSession()
-		if err != nil {
-			c.lock.Unlock()
-			c.log.Printf("error opening session: %s", err)
-			return
-		}
-	}
-	c.lock.Unlock()
-
-	stream, err = c.session.Open()
+	stream, err := c.getStream()
 	if err != nil {
-		if err == yamux.ErrSessionShutdown {
-			c.lock.Lock()
-			err = c.openSession()
-			c.lock.Unlock()
-			if err != nil {
-				c.log.Printf("error opening session: %s", err)
-				return
-			}
-		}
-		stream, err = c.session.Open()
-		if err != nil {
-			c.log.Printf("error opening stream: %s", err)
-			return
-		}
+		c.log.Print("failed creating stream: %s", err)
+		return
 	}
 
 	received, sent = Pipe(stream, conn)
 }
 
-func (c *client) openSession() error {
-	err := c.openWebsocket()
+func (c *client) getStream() (net.Conn, error) {
+	stream, err := c.session.Open()
 	if err != nil {
-		return err
+		if err == yamux.ErrSessionShutdown {
+			err = c.openSession()
+			if err != nil {
+				return nil, errors.Wrap(err, "error opening session")
+			}
+		}
+		stream, err = c.session.Open()
+		if err != nil {
+			return nil, errors.Wrap(err, "error opening stream")
+		}
+	}
+	return stream, err
+}
+
+func (c *client) openSession() error {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	if c.webSocket == nil {
+		err := c.openWebsocket()
+		if err != nil {
+			return err
+		}
 	}
 
 	// Setup client side of yamux
@@ -78,6 +74,9 @@ func (c *client) openWebsocket() error {
 		return err
 	}
 	wsConfig.TlsConfig = c.tlsConfig
+	wsConfig.Dialer = &net.Dialer{
+		KeepAlive: 30 * time.Second,
+	}
 
 	wsconn, err := websocket.DialConfig(wsConfig)
 	if err != nil {

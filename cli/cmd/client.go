@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"strconv"
-
 	"github.com/jsimonetti/tlstun/client"
 
 	"github.com/spf13/cobra"
@@ -11,8 +9,6 @@ import (
 
 func init() {
 	RootCmd.AddCommand(clientCmd)
-	clientCmd.AddCommand(registerCmd)
-	clientCmd.AddCommand(regstatusCmd)
 
 	clientCmd.PersistentFlags().Bool("verbose", false, "Turn on verbose logging.")
 	clientCmd.PersistentFlags().String("bind", "127.0.0.1", "Ip of the client")
@@ -37,7 +33,7 @@ func init() {
 
 func clientConfig() client.Config {
 	return client.Config{
-		Port:          strconv.Itoa(viper.GetInt("client_port")),
+		Port:          viper.GetInt("client_port"),
 		Address:       viper.GetString("client_bind"),
 		ServerAddress: viper.GetString("client_serveraddress"),
 		Verbose:       viper.GetBool("client_verbose"),
@@ -58,26 +54,4 @@ var clientCmd = &cobra.Command{
 func startClient(cmd *cobra.Command, args []string) {
 	c := client.NewClient(clientConfig())
 	c.Start()
-}
-
-var registerCmd = &cobra.Command{
-	Use:   "register",
-	Short: "Register TLSTun client",
-	Run:   registerClient,
-}
-
-func registerClient(cmd *cobra.Command, args []string) {
-	c := client.NewClient(clientConfig())
-	c.Register()
-}
-
-var regstatusCmd = &cobra.Command{
-	Use:   "regstatus",
-	Short: "Check registation status with server",
-	Run:   regStatus,
-}
-
-func regStatus(cmd *cobra.Command, args []string) {
-	c := client.NewClient(clientConfig())
-	c.RegisterStatus()
 }

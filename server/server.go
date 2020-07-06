@@ -4,9 +4,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"io/ioutil"
 	"net/http"
-	"time"
 
 	"github.com/jsimonetti/tlstun/cert"
 	"github.com/jsimonetti/tlstun/log"
@@ -14,12 +14,11 @@ import (
 	golog "log"
 
 	socks5 "github.com/armon/go-socks5"
-	"github.com/boltdb/bolt"
 	"golang.org/x/net/websocket"
 )
 
 type Config struct {
-	Port         string
+	Port         int
 	Address      string
 	Verbose      bool
 	RegisterPass string
@@ -33,17 +32,18 @@ type server struct {
 	tlsConfig    *tls.Config
 	socksServer  *socks5.Server
 	log          *log.Logger
-	db           *bolt.DB
 	registerPass string
 	certificate  string
 	key          string
 	ca           string
 
+	server *http.Server
+
 	connections int32
 }
 
 func NewServer(config Config) *server {
-	addr := config.Address + ":" + config.Port
+	addr := fmt.Sprintf("%s:%d", config.Address, config.Port)
 	s := &server{
 		listenAddr:   addr,
 		log:          log.NewLogger(config.Verbose),
@@ -58,14 +58,6 @@ func NewServer(config Config) *server {
 
 func (s *server) Start() {
 	var err error
-
-	// Open the my.db data file in your current directory.
-	// It will be created if it doesn't exist.
-	s.db, err = bolt.Open("server.db", 0600, &bolt.Options{Timeout: 1 * time.Second})
-	if err != nil {
-		s.log.Fatal(err)
-	}
-	defer s.db.Close()
 
 	conf := &socks5.Config{
 		Logger: golog.New(s.log, "", 0),
@@ -83,9 +75,6 @@ func (s *server) Start() {
 	http.Handle("/tlstun/socket/", websocket.Handler(func(w *websocket.Conn) {
 		s.sockHandler(w)
 	}))
-	http.HandleFunc("/tlstun/register", func(w http.ResponseWriter, r *http.Request) {
-		s.serveRegister(w, r)
-	})
 	http.HandleFunc("/tlstun/poison/", func(w http.ResponseWriter, r *http.Request) {
 		s.servePoison(w, r)
 	})
@@ -98,12 +87,14 @@ func (s *server) Start() {
 		TLSConfig: s.tlsConfig,
 	}
 
+	s.server = server
+
 	s.log.Printf("listening start on %s\n", s.listenAddr)
 	if s.registerPass != "" {
 		s.log.Print("registration enabled!")
 	}
 
-	err = server.ListenAndServeTLS("server.crt", "server.key")
+	err = server.ListenAndServeTLS(s.certificate, s.key)
 	if err != nil {
 		s.log.Fatalf("ListenAndServeTLS: %s", err)
 	}
@@ -121,6 +112,7 @@ func (s *server) getTlsConfig() {
 	}
 
 	if s.ca != "" {
+		s.log.Printf("loading ca %s", s.ca)
 		certBytes, err := ioutil.ReadFile(s.ca)
 		if err != nil {
 			s.log.Fatal(err)
@@ -133,6 +125,9 @@ func (s *server) getTlsConfig() {
 		pool := x509.NewCertPool()
 		pool.AddCert(cert)
 		tlsConfig.ClientCAs = pool
+		tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+	} else {
+		s.log.Fatal("ca required")
 	}
 	tlsConfig.BuildNameToCertificate()
 	s.tlsConfig = tlsConfig

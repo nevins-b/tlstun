@@ -11,15 +11,18 @@ import (
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/jsimonetti/tlstun/cert"
 	"github.com/jsimonetti/tlstun/log"
+	"github.com/pkg/errors"
+	"golang.org/x/net/websocket"
 
 	"github.com/hashicorp/yamux"
 )
 
 type Config struct {
-	Port          string
+	Port          int
 	Address       string
 	ServerAddress string
 	Verbose       bool
@@ -31,40 +34,51 @@ type Config struct {
 }
 
 type client struct {
-	listenAddr  string
-	serverAddr  string
-	log         *log.Logger
-	tlsConfig   *tls.Config
-	certificate string
-	key         string
-	ca          string
-	insecure    bool
-	nopoison    bool
+	ProxyAddress string
+	listenAddr   string
+	serverAddr   string
+	log          *log.Logger
+	tlsConfig    *tls.Config
+	certificate  string
+	key          string
+	ca           string
+	insecure     bool
+	nopoison     bool
 
 	connections int32
 
+	listener net.Listener
+
 	lock      sync.Mutex
 	session   *yamux.Session
-	webSocket net.Conn
+	webSocket *websocket.Conn
 }
 
 func NewClient(config Config) *client {
-	addr := config.Address + ":" + string(config.Port)
+	addr := fmt.Sprintf("%s:%d", config.Address, config.Port)
+
 	c := &client{
-		listenAddr:  addr,
-		serverAddr:  config.ServerAddress,
-		log:         log.NewLogger(config.Verbose),
-		certificate: config.Certificate,
-		key:         config.Key,
-		ca:          config.CA,
-		insecure:    config.Insecure,
-		nopoison:    config.NoPoison,
+		ProxyAddress: fmt.Sprintf("socks5://%s", addr),
+		listenAddr:   addr,
+		serverAddr:   config.ServerAddress,
+		log:          log.NewLogger(config.Verbose),
+		certificate:  config.Certificate,
+		key:          config.Key,
+		ca:           config.CA,
+		insecure:     config.Insecure,
+		nopoison:     config.NoPoison,
 	}
 	c.getTlsConfig()
 	return c
 }
 
-func (c *client) Start() {
+func (c *client) Stop() error {
+	c.session.Close()
+	c.webSocket.Close()
+	return c.listener.Close()
+}
+
+func (c *client) Start() error {
 	if !c.nopoison {
 		c.poison()
 	}
@@ -72,15 +86,24 @@ func (c *client) Start() {
 	c.log.Printf("listening start on %s\n", c.listenAddr)
 	ln, err := net.Listen("tcp", c.listenAddr)
 	if err != nil {
-		c.log.Fatalf("error listening: %s\n", err)
-		return
+		return errors.Wrap(err, "error listening")
 	}
+	err = c.openSession()
+	if err != nil {
+		return errors.Wrap(err, "error opening session")
+	}
+	c.listener = ln
+	go c.hanldeConnections()
+	time.Sleep(1)
+	return nil
+}
 
+func (c *client) hanldeConnections() {
 	for {
-		conn, err := ln.Accept()
+		conn, err := c.listener.Accept()
 		if nil != err {
 			c.log.Printf("error accepting connection: %s, open connections: %d\n", err, atomic.LoadInt32(&c.connections))
-			continue
+			return
 		}
 		atomic.AddInt32(&c.connections, 1)
 		c.log.Printf("accepted connection from: %s, open connections: %d\n", conn.RemoteAddr(), atomic.LoadInt32(&c.connections))
@@ -116,7 +139,7 @@ func (c *client) getTlsConfig() {
 	}
 
 	if c.insecure {
-		tlsConfig.InsecureSkipVerify = true
+		tlsConfig.InsecureSkipVerify = c.insecure
 	}
 
 	tlsConfig.BuildNameToCertificate()

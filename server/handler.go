@@ -1,7 +1,6 @@
 package server
 
 import (
-	"crypto/x509"
 	"io"
 	"net/http"
 	"strings"
@@ -12,10 +11,6 @@ import (
 )
 
 func (s *server) sockHandler(w *websocket.Conn) {
-	if !s.isTrusted(w.Request()) {
-		s.log.Printf("untrusted client connected from %s", w.Request().RemoteAddr)
-		return
-	}
 	atomic.AddInt32(&s.connections, 1)
 
 	s.log.Printf("serving client connection, raddr: %s, connections: %d", w.Request().RemoteAddr, atomic.LoadInt32(&s.connections))
@@ -55,54 +50,7 @@ func (s *server) sockHandler(w *websocket.Conn) {
 	return
 }
 
-func (s *server) serveRegister(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/tlstun/register" || r.Method != "POST" {
-		http.Error(w, "Not found", 404)
-		s.log.Printf("404 not found: %s %s", r.Method, r.URL.Path)
-		return
-	}
-	s.log.Printf("handled register for %s", r.RemoteAddr)
-
-	var cert *x509.Certificate
-
-	if r.TLS != nil {
-		if len(r.TLS.PeerCertificates) < 1 {
-			s.log.Printf("no client cert found registering for %s", r.RemoteAddr)
-			http.Error(w, "Not found", 404)
-			return
-		}
-		cert = r.TLS.PeerCertificates[len(r.TLS.PeerCertificates)-1]
-	} else {
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	password := r.FormValue("password")
-	if s.isTrusted(r) {
-		w.Write([]byte("Allready trusted"))
-		return
-	}
-
-	if !s.passwordCheck(password) {
-		w.Write([]byte("Failed"))
-		return
-	}
-
-	err := s.saveCert(cert)
-	if err != nil {
-		s.log.Printf("cannot save cert: %s", err)
-		return
-	}
-
-	w.Write([]byte("OK"))
-}
-
 func (s *server) servePoison(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" || !s.isTrusted(r) {
-		http.Error(w, "Not found", 404)
-		s.log.Printf("404 not found: %s %s", r.Method, r.URL.Path)
-		return
-	}
 	s.log.Printf("served poison: %s", r.URL.Path)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -111,18 +59,8 @@ func (s *server) servePoison(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) serveHome(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/tlstun/status" || r.Method != "GET" {
-		http.Error(w, "Not found", 404)
-		s.log.Printf("404 not found: %s %s", r.Method, r.URL.Path)
-		return
-	}
-
 	s.log.Printf("served page: %s", r.URL.Path)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if !s.isTrusted(r) {
-		w.Write([]byte(UnTrustedResponse()))
-		return
-	}
 	w.Write([]byte(TrustedResponse()))
 	return
 }

@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"strconv"
+	"log"
 
 	"github.com/jsimonetti/tlstun/server"
 
@@ -31,7 +31,7 @@ func init() {
 
 func serverConfig() server.Config {
 	return server.Config{
-		Port:         strconv.Itoa(viper.GetInt("server_port")),
+		Port:         viper.GetInt("server_port"),
 		Address:      viper.GetString("server_bind"),
 		Verbose:      viper.GetBool("server_verbose"),
 		RegisterPass: viper.GetString("server_registerpassword"),
@@ -48,6 +48,10 @@ var serverCmd = &cobra.Command{
 }
 
 func startServer(cmd *cobra.Command, args []string) {
+	err := cmd.ParseFlags(args)
+	if err != nil {
+		log.Fatal(err)
+	}
 	s := server.NewServer(serverConfig())
 	s.Start()
 }
